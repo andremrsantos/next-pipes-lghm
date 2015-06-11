@@ -30,15 +30,14 @@ params.min_match = 16
  * Building Working Enviroment...
  */
 Channel.from('alignment', 'read', 'report')
-        .subscribe {
+  .subscribe {
     f = file("${baseDir}/${it}")
     if (f.exists() && !f.isDirectory()) {
         error "Unable to create '${f}'..."
     } else if (!f.exists()) {
         f.mkdir()
     }
-}
-subscribe
+  }
 
 logger_file = file("${baseDir}/small-rna.${running_stamp}.log")
 logger = Channel.subscribe {
