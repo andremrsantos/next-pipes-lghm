@@ -15,46 +15,58 @@
 fastq_regex = /^(.+)\.(fastq|fq)(\.gz|)$/
 running_stamp = new Date().format('yyyyMMdd')
 
-
-params.input_reads = "$baseDir/raw/*.fastq.gz"
+params.input = "./raw/*.fastq.gz"
 params.genome = "/data/resources/references/human/hg19/star_genome"
 params.annot = ""
-params.label = ""
+params.label = "transcript"
 params.adapter = "ATCTCGTATGCCGTCTTCTGCTTG"
 params.min_size = 18
 params.quality_cutoff = 20
 params.max_mismatch = 3
 params.min_match = 16
+params.base_dir = "./"
 
 /**
  * Building Working Enviroment...
  */
+
 Channel.from('alignment', 'read', 'report')
   .subscribe {
-    f = file("${baseDir}/${it}")
+    f = file("${params.base_dir}/${it}")
     if (f.exists() && !f.isDirectory()) {
-        error "Unable to create '${f}'..."
+        error "ERROR: Unable to create '${f}'..."
     } else if (!f.exists()) {
         f.mkdir()
     }
   }
 
-logger_file = file("${baseDir}/small-rna.${running_stamp}.log")
-logger = Channel.subscribe {
+logger_file = file("${params.base_dir}/small-rna.${running_stamp}.log")
+logger_file.setText('')
+
+logger = Channel.create().subscribe {
     logger_file << "${it}\n"
     log.info(it)
 }
 
-align_copy = Channel.subscribe { it.copyTo("${baseDir}/alignment/") }
-reads_copy = Channel.subscribe { it.copyTo("${baseDir}/reads/") }
-reptr_copy = Channel.subscribe { it.copyTo("${baseDir}/report/") }
+align_copy = Channel.create().subscribe { 
+  logger << "Copying file '${it.getFileName()}'..."
+  it.copyTo("${params.base_dir}/alignment/") 
+}
+reads_copy = Channel.create().subscribe { 
+  logger << "Copying file '${it.getFileName()}'..."
+  it.copyTo("${params.base_dir}/read/")
+}
+reptr_copy = Channel.create().subscribe { 
+  logger << "Copying file '${it.getFileName()}'..."
+  it.copyTo("${params.base_dir}/report/") 
+}
 
 logger << "Small RNA Pipeline (from LGHM)"
 logger << "------------------------------"
 logger << "running_at   : ${new Date()}"
-logger << "dir          : ${baseDir}"
-logger << "genome       : ${params.genome.baseName()}"
-logger << "annotation   : ${params.annot.baseName()}"
+logger << "working dir  : ${file(params.base_dir)}"
+logger << "genome       : ${params.genome}"
+logger << "annotation   : ${params.annot}"
 logger << "minimal size : ${params.min_size}"
 logger << "qual cutoff  : ${params.quality_cutoff}"
 logger << "max mismatch : ${params.max_mismatch}"
@@ -64,42 +76,49 @@ logger << "samples      : "
 /**
  * Loading input file list
  */
-Channel.fromPath(params.input_reads)
-        .filter { it.FileName() =~ fastq_regex }
-        .ifEmpty { error "No read found matching: '${params.input_reads}'" }
-        .map { path -> tuble(readPrefix(path), path) }
-        .each {
-    logger << "\t${name} => ${path}"
-}
-.into(raw_reads)
+raw_reads = Channel.create()
 
-if (param.label != '')
-    label = "${params.label}-"
-else
-    label = ''
+Channel.fromPath(params.input)
+      .ifEmpty { error "ERROR: No read found matching: '${params.input_reads}'" }
+      .map { tuple( sampleName(it), it ) }
+      .tap( raw_reads )
+      .subscribe {
+        logger << "\t${it[0]} => ${it[1]}"
+      }
 
 process filter_reads {
     input:
-    set val(sample), file(sample_path) from raw_reads
+    val adapter from params.adapter
+    val min_size from params.min_size
+    val qual_cutoff from params.quality_cutoff
+    set val(name), file(path) from raw_reads
 
     output:
-    set val(sample), file("${sample}.cutted.fastq") into cut_reads
-    file "${sample}.cutted.fastq" into reads_copy
+    set val(name), file("${name}.cutted.fastq") into cut_reads
+    file "${name}.cutted.fastq" into reads_copy
     stdout into logger
-    stderr into logger
 
     script:
-    """
-    echo "------------------------------"
-    echo "Cutting and Trimming Reads..."
-    echo "Sample: ${sample}"
-    cutadapt -a ${params.adapter} \
-        -m ${params.min_size} \
-        -q ${params.quality_cutoff} \
-        -o ${sample}.cutted.fastq \
-        ${sample_path}
-    echo "------------------------------"
-    """
+    fpath = file("${params.base_dir}/read/${name}.cutted.fastq")
+    if (fpath.exists())
+      """
+      echo "------------------------------"
+      echo "Loading previous result '${fpath}' ..."
+      cp ${fpath} ./
+      echo "------------------------------"
+      """
+    else 
+      """
+      echo "------------------------------"
+      echo "Cutting and Trimming Reads..."
+      echo "Sample: ${name}"
+      cutadapt -a ${adapter} \
+        -m ${min_size} \
+        -q ${qual_cutoff} \
+        -o ${name}.cutted.fastq \
+        ${path}
+      echo "------------------------------"
+      """
 }
 
 process alignment {
@@ -110,7 +129,6 @@ process alignment {
     set val(sample), file("${sample}.align.bam") into alignments
     file "${sample}.align.bam" into align_copy
     stdout into logger
-    stderr into logger
 
     script:
     """
@@ -132,7 +150,7 @@ process alignment {
         --outSAMprimaryFlag AllBestScore
     samtools view ${sample}Aligned.out.bam -x NH | \
         grep -Pv 'HI:i:([2-9]|[1-9][0-9]+)' | \
-        samtools view -bS > ${sample}.align.bam
+        samtools view -bS - > ${sample}.align.bam
     echo "------------------------------"
     """
 }
@@ -151,7 +169,7 @@ process quantify {
     """
     echo "------------------------------"
     htseq-count -a 0 -f bam ${sample_path} ${params.annot} \
-        > ${sample}.${label}count.txt
+        > ${sample}.${params.label}.count.txt
     echo "------------------------------"
     """
 }
