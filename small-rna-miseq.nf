@@ -82,6 +82,8 @@ file_list.subscribe { name, path -> logger("  --> $name @ '$path'") }
 // 1st STEP: QC
 // Filtering and Trimming low quality reads and adpater contaminant removal
 process filter_reads {
+    cpu 1
+
     input:
     val read_folder
     set val(name), file(path) from raw_reads
@@ -148,6 +150,8 @@ align_logger.subscribe(logger)
 // 3rd - Quantify
 // Transcripts are quantified using htseq-count
 process quantify {
+    cpu 1
+
     input:
     val report_folder
     set val(sample), file(sample_path) from alignments
